@@ -32,6 +32,16 @@ void SysLogger::setXinXout(std::shared_ptr<dai::Pipeline> pipeline) {
 
 void SysLogger::setupQueues(std::shared_ptr<dai::Device> device) {
     loggerQ = device->getOutputQueue(loggerQName, 8, false);
+    // Cache the latest sample on the XLink callback thread. produceDiagnostics()
+    // then reads the cache without blocking, keeping the node's default callback
+    // group free for the parameter services that share it.
+    loggerQ->addCallback([this](const std::shared_ptr<dai::ADatatype>& data) {
+        auto sysInfo = std::dynamic_pointer_cast<dai::SystemInformation>(data);
+        if(sysInfo) {
+            std::lock_guard<std::mutex> lock(sysInfoMtx);
+            lastSysInfo = sysInfo;
+        }
+    });
     updater = std::make_shared<diagnostic_updater::Updater>(getROSNode());
     updater->setHardwareID(getROSNode()->get_fully_qualified_name() + std::string("_") + device->getMxId() + std::string("_") + device->getDeviceName());
     updater->add("sys_logger", std::bind(&SysLogger::produceDiagnostics, this, std::placeholders::_1));
@@ -65,9 +75,12 @@ std::string SysLogger::sysInfoToString(const dai::SystemInformation& sysInfo) {
 
 void SysLogger::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
     try {
-        bool timeout;
-        auto logData = loggerQ->get<dai::SystemInformation>(std::chrono::seconds(5), timeout);
-        if(!timeout) {
+        std::shared_ptr<dai::SystemInformation> logData;
+        {
+            std::lock_guard<std::mutex> lock(sysInfoMtx);
+            logData = lastSysInfo;
+        }
+        if(logData) {
             stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "System Information");
             const dai::SystemInformation& sysInfo = *logData;
             stat.add("Leon CSS CPU Usage", sysInfo.leonCssCpuUsage.average * 100);

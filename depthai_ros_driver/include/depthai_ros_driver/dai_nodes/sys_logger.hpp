@@ -1,3 +1,6 @@
+#include <memory>
+#include <mutex>
+
 #include "depthai/pipeline/datatype/SystemInformation.hpp"
 #include "depthai_ros_driver/dai_nodes/base_node.hpp"
 #include "diagnostic_updater/diagnostic_updater.hpp"
@@ -37,6 +40,10 @@ class SysLogger : public BaseNode {
     std::shared_ptr<dai::node::SystemLogger> sysNode;
     std::shared_ptr<dai::DataOutputQueue> loggerQ;
     std::string loggerQName;
+    // Latest system info cached from the queue callback (XLink thread) so that
+    // produceDiagnostics() never blocks the node's default callback group.
+    std::mutex sysInfoMtx;
+    std::shared_ptr<dai::SystemInformation> lastSysInfo;
 };
 }  // namespace dai_nodes
 }  // namespace depthai_ros_driver
