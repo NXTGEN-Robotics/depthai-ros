@@ -83,6 +83,8 @@ void Camera::diagCB(const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg) 
 }
 
 void Camera::start() {
+    // Serialize against stop()/restart() so start and teardown cannot interleave.
+    std::lock_guard<std::mutex> lock(stateMutex);
     RCLCPP_INFO(this->get_logger(), "Starting camera.");
     if(!camRunning) {
         onConfigure();
@@ -92,17 +94,22 @@ void Camera::start() {
 }
 
 void Camera::stop() {
+    // Serialize teardown. stop() is reachable from stopCB (Reentrant group),
+    // rclcpp::on_shutdown and ~Camera(); the lock + atomic exchange below make
+    // the device/queue teardown run exactly once even under concurrent calls.
+    std::lock_guard<std::mutex> lock(stateMutex);
     if(rclcpp::ok()) {
         RCLCPP_INFO(get_logger(), "Stopping camera.");
     }
-    if(camRunning) {
+    // exchange(false) returns the previous value: only the first caller that
+    // observes "running" performs the teardown; the rest fall through.
+    if(camRunning.exchange(false)) {
         for(const auto& node : daiNodes) {
             node->closeQueues();
         }
         daiNodes.clear();
         device.reset();
         pipeline.reset();
-        camRunning = false;
         if(rclcpp::ok()) {
             RCLCPP_INFO(get_logger(), "Camera stopped!");
         }
