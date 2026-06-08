@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,11 @@ class Camera : public rclcpp::Node {
     std::shared_ptr<dai::Device> device;
     std::vector<std::unique_ptr<dai_nodes::BaseNode>> daiNodes;
     std::atomic<bool> camRunning = false;
+    // Serializes start()/stop() so the device teardown runs exactly once.
+    // stop() is reachable concurrently from stopCB (Reentrant group),
+    // rclcpp::on_shutdown and ~Camera(); without this, two callers race on
+    // daiNodes/device teardown (iterator invalidation + shared_ptr data race).
+    std::mutex stateMutex;
     bool initialized = false;
     std::unique_ptr<dai::ros::TFPublisher> tfPub;
     rclcpp::TimerBase::SharedPtr startTimer;
