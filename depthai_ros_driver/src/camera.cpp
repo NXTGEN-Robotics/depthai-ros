@@ -1,5 +1,7 @@
 #include "depthai_ros_driver/camera.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 
 #include "depthai/device/Device.hpp"
@@ -76,6 +78,16 @@ void Camera::diagCB(const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg) 
                 RCLCPP_ERROR(get_logger(), "Camera diagnostics error: %s", status.message.c_str());
                 if(ph->getParam<bool>("i_restart_on_diagnostics_error")) {
                     restart();
+                } else if(ph->getParam<bool>("i_exit_on_diagnostics_error")) {
+                    // Force a hard, non-zero process exit so a service supervisor
+                    // (e.g. systemd Restart=on-failure) restarts the node with a
+                    // fresh device connection. We deliberately bypass the in-process
+                    // restart()/stop() teardown, which can block indefinitely on a
+                    // dead XLink link. std::quick_exit skips static destructors and
+                    // rclcpp on_shutdown handlers, avoiding that teardown. (NIE-523)
+                    RCLCPP_FATAL(get_logger(), "Camera diagnostics error '%s'; exiting for supervisor restart (i_exit_on_diagnostics_error)", status.message.c_str());
+                    std::fflush(nullptr);
+                    std::quick_exit(EXIT_FAILURE);
                 };
             }
         }
