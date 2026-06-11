@@ -38,6 +38,14 @@ void CameraParamHandler::declareParams() {
     declareAndLogParam<int>("i_laser_dot_brightness", 800, getRangedIntDescriptor(0, 1200));
     declareAndLogParam<int>("i_floodlight_brightness", 0, getRangedIntDescriptor(0, 1500));
     declareAndLogParam<bool>("i_restart_on_diagnostics_error", false);
+    // Exit the process (non-zero) when the sys_logger diagnostic reports ERROR
+    // (e.g. a stalled device link), letting a service supervisor restart the node.
+    // Preferred over i_restart_on_diagnostics_error, which uses the in-process
+    // teardown that can block on a dead XLink. Off by default. (NIE-523)
+    declareAndLogParam<bool>("i_exit_on_diagnostics_error", false);
+    // Seconds without a SystemInformation sample before sys_logger diagnostics go
+    // ERROR. SystemLogger streams ~1 Hz; 0 disables the staleness check. (NIE-523)
+    declareAndLogParam<double>("i_diagnostics_stale_timeout_s", 5.0);
     declareAndLogParam<bool>("i_rs_compat", false);
 
     declareAndLogParam<bool>("i_publish_tf_from_calibration", false);

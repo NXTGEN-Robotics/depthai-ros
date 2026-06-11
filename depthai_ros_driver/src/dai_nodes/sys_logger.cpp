@@ -32,6 +32,10 @@ void SysLogger::setXinXout(std::shared_ptr<dai::Pipeline> pipeline) {
 
 void SysLogger::setupQueues(std::shared_ptr<dai::Device> device) {
     loggerQ = device->getOutputQueue(loggerQName, 8, false);
+    // Staleness threshold for the cached sysinfo. The device SystemLogger streams
+    // ~1 Hz regardless of any application-level (on-demand) gating, so this is a
+    // gate-immune device-link liveness signal. Declared by CameraParamHandler.
+    getROSNode()->get_parameter_or<double>("camera.i_diagnostics_stale_timeout_s", staleTimeoutSec, 5.0);
     // Cache the latest sample on the XLink callback thread. produceDiagnostics()
     // then reads the cache without blocking, keeping the node's default callback
     // group free for the parameter services that share it.
@@ -40,6 +44,7 @@ void SysLogger::setupQueues(std::shared_ptr<dai::Device> device) {
         if(sysInfo) {
             std::lock_guard<std::mutex> lock(sysInfoMtx);
             lastSysInfo = sysInfo;
+            lastSysInfoTime = std::chrono::steady_clock::now();
         }
     });
     updater = std::make_shared<diagnostic_updater::Updater>(getROSNode());
@@ -76,11 +81,27 @@ std::string SysLogger::sysInfoToString(const dai::SystemInformation& sysInfo) {
 void SysLogger::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
     try {
         std::shared_ptr<dai::SystemInformation> logData;
+        double ageSec = 0.0;
         {
             std::lock_guard<std::mutex> lock(sysInfoMtx);
             logData = lastSysInfo;
+            if(logData) {
+                ageSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - lastSysInfoTime).count();
+            }
         }
-        if(logData) {
+        if(!logData) {
+            // No sample has arrived yet. This is the startup window owned by the
+            // initial-connection retry loop, not a runtime fault: report WARN (not
+            // ERROR) so a diagnostics-error recovery action cannot crash-loop here.
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for first system information");
+        } else if(staleTimeoutSec > 0.0 && ageSec > staleTimeoutSec) {
+            // Samples were flowing and then stopped: the device data link (XLink)
+            // has stalled while the node stays alive. Surface as ERROR so the
+            // configured recovery (i_exit_on_diagnostics_error) can fire. (NIE-523)
+            std::stringstream ss;
+            ss << "System information stale for " << ageSec << " s (> " << staleTimeoutSec << " s); device link stalled?";
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, ss.str());
+        } else {
             stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "System Information");
             const dai::SystemInformation& sysInfo = *logData;
             stat.add("Leon CSS CPU Usage", sysInfo.leonCssCpuUsage.average * 100);
@@ -98,8 +119,6 @@ void SysLogger::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& 
             stat.add("Leon MSS Chip Temperature", sysInfo.chipTemperature.mss);
             stat.add("UPA Chip Temperature", sysInfo.chipTemperature.upa);
             stat.add("DSS Chip Temperature", sysInfo.chipTemperature.dss);
-        } else {
-            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "No Data");
         }
     } catch(const std::exception& e) {
         RCLCPP_ERROR(getROSNode()->get_logger(), "No data on logger queue!");

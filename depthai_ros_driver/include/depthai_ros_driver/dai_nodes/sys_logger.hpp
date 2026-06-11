@@ -1,3 +1,4 @@
+#include <chrono>
 #include <memory>
 #include <mutex>
 
@@ -44,6 +45,12 @@ class SysLogger : public BaseNode {
     // produceDiagnostics() never blocks the node's default callback group.
     std::mutex sysInfoMtx;
     std::shared_ptr<dai::SystemInformation> lastSysInfo;
+    // Monotonic timestamp of the last cached sample. produceDiagnostics() ages the
+    // cache against this so a silent XLink data-stall (callbacks stop firing while
+    // the node stays alive) is reported as ERROR instead of stale OK. (NIE-523)
+    std::chrono::steady_clock::time_point lastSysInfoTime{};
+    // Sysinfo staleness threshold in seconds; read from "camera.i_diagnostics_stale_timeout_s".
+    double staleTimeoutSec{5.0};
 };
 }  // namespace dai_nodes
 }  // namespace depthai_ros_driver
